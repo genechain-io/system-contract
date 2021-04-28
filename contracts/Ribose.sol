@@ -15,6 +15,7 @@ contract Ribose {
     uint16 public constant MaxStakeCount = 5;
 
     uint32 public constant FullProfitShare = 1_000_000_000;
+    uint32 public constant StakerProfitShare = 800_000_000;
 
     uint256 public constant MinimalStakingRNA = 1 ether;
     uint256 public constant MinimalStakingARM = 1 ether;
@@ -33,7 +34,7 @@ contract Ribose {
     uint256[] public BlockProfits; // Predefined block profit, index grow every 20,000,000 blocks(2 year)
     address public constant ARMAddr = 0x000000000000000000000000000000000000c000; // ARM ERC20 contract address
     bool public initialized;
-        
+    
     struct Candidate {
         string website;                 // website of this candidate
         string email;                   // email of this candidate
@@ -82,10 +83,6 @@ contract Ribose {
 
     mapping(uint256 => bool) punished;
     mapping(uint256 => bool) decreased;
-
-    // event ARMSet(
-    //     address indexed armAddr
-    // );
     
     event LogRegister(
         address indexed candidate,
@@ -186,7 +183,7 @@ contract Ribose {
         require(!punished[block.number], "Already punished");
         _;
     }
-
+    
     // init validators by genesis config
     function initialize(address[] calldata vals) external onlyNotInitialized {
         require(vals.length <= MaxValidators, "Too many validators");
@@ -205,6 +202,7 @@ contract Ribose {
             if (candidates[val].profitTaker == address(0)) {
                 Candidate memory candidate;
                 candidate.profitTaker = val; // set oneself as taker
+                candidate.stakerShare = StakerProfitShare; //stakerShare;
                 candidate.createTime = block.timestamp;
                 candidate.pendingSettleBlock = block.number;
                 candidates[vals[i]] = candidate;
@@ -229,7 +227,7 @@ contract Ribose {
         
         Candidate memory candidate;
         candidate.profitTaker = nominee;
-        candidate.stakerShare = 800_000_000; //stakerShare;
+        candidate.stakerShare = StakerProfitShare; //stakerShare;
         candidate.createTime = block.timestamp;
         candidate.pendingSettleBlock = block.number;
         candidates[nominee] = candidate;
@@ -285,7 +283,7 @@ contract Ribose {
         ) {
         Candidate memory c = candidates[candidate];
         return(
-            c.stakerShare,
+            StakerProfitShare, //c.stakerShare,
             c.stakePower,
             c.stakeRNA,
             c.stakeARM,
@@ -551,6 +549,11 @@ contract Ribose {
         );
     }
 
+    // get already booked profit
+    function getBookedProfit(address staker) external view returns (uint256) {
+        return profitBook[staker];
+    }
+
     // get a list of candidates staker support
     function getStakedCandidates(address staker) external view returns (address[] memory) {
         return stakers[staker];
@@ -584,7 +587,7 @@ contract Ribose {
             staker.transfer(rnaAmount);
         }
         if (armAmount > 0) {
-            TransferHelper.safeTransferFrom(ARMAddr, address(this), staker, armAmount);
+            TransferHelper.safeTransfer(ARMAddr, staker, armAmount);
         }
 
         uint256 delta = oldPower - newPower;
@@ -643,6 +646,14 @@ contract Ribose {
     ) external onlyInitialized returns (bool) {
         address staker = msg.sender;
         _bookStakerProfit(candidate, staker);
+        return true;
+    }
+    
+    function settleAllStakerProfit()  external onlyInitialized returns (bool) {
+        address staker = msg.sender;
+        for (uint256 i = 0; i < stakers[staker].length; i++) {
+            _bookStakerProfit(stakers[staker][i], staker);
+        }
         return true;
     }
 
@@ -755,9 +766,9 @@ contract Ribose {
                 candidates[miner].pendingProfit.add(remain);
             }
         } else {
-            if (candidates[miner].stakerShare > 0 && candidates[miner].stakePower > 0) {
+            if (/*candidates[miner].stakerShare > 0 && */candidates[miner].stakePower > 0) {
                 // share profit with stakers by share rate
-                uint256 stakerValue = _calcValueChange(candidates[miner].stakerShare, candidates[miner].stakePower, totalProfit);
+                uint256 stakerValue = _calcValueChange(/*candidates[miner].stakerShare*/StakerProfitShare, candidates[miner].stakePower, totalProfit);
                 candidates[miner].profitValue += stakerValue;
                 uint256 stakerProfit = stakerValue.mul(candidates[miner].stakePower).div(ProfitValueScale); // CHECK
                 uint256 validatorProfit = totalProfit - stakerProfit;

@@ -442,6 +442,7 @@ contract Ribose {
                 return;
             }
         }
+        require(stakers[staker].length < MaxStakeCount, "Staked too many candidates");
         stakers[staker].push(candidate);
     }
     
@@ -472,11 +473,10 @@ contract Ribose {
             TransferHelper.safeTransferFrom(ARMAddr, staker, address(this), armAmount);
         }
 
+        _addStakedCandidate(staker, candidate);
         // update stake info
         if (stakes[candidate][staker].lockBlock == 0) {
             // not staked for this candidate yet
-            require(stakers[staker].length < MaxStakeCount, "Staked too many candidates");
-            _addStakedCandidate(staker, candidate);
             StakeingInfo memory stakeInfo;
             stakeInfo.rna = rnaAmount;
             stakeInfo.arm = armAmount;
@@ -576,7 +576,7 @@ contract Ribose {
         uint256 oldPower = _calcStakePower(stakes[candidate][staker].rna, stakes[candidate][staker].arm);
         stakes[candidate][staker].rna -= rnaAmount;
         stakes[candidate][staker].arm -= armAmount;
-        stakes[candidate][staker].lockBlock = block.number;
+        // stakes[candidate][staker].lockBlock = block.number;
 
         uint256 newPower = 0;
         if (stakes[candidate][staker].rna != 0) {
@@ -585,9 +585,11 @@ contract Ribose {
 
         if (rnaAmount > 0) {
             staker.transfer(rnaAmount);
+            candidates[candidate].stakeRNA -= rnaAmount;
         }
         if (armAmount > 0) {
             TransferHelper.safeTransfer(ARMAddr, staker, armAmount);
+            candidates[candidate].stakeARM -= armAmount;
         }
 
         uint256 delta = oldPower - newPower;

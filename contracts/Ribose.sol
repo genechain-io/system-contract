@@ -15,7 +15,7 @@ contract Ribose {
     uint16 public constant MaxStakeCount = 5;
 
     uint32 public constant FullProfitShare = 1_000_000_000;
-    uint32 public constant StakerProfitShare = 800_000_000;
+    uint32 public constant StakerProfitShare = 900_000_000;
 
     uint256 public constant MinimalStakingRNA = 1 ether;
     uint256 public constant MinimalStakingARM = 1 ether;
@@ -254,6 +254,14 @@ contract Ribose {
         
         emit LogCandidateUpdate(candidate, block.timestamp);
 
+        return true;
+    }
+    
+    function setProfitTaker(address candidate, address payable taker) external onlyInitialized returns (bool) {
+        require(candidates[candidate].createTime > 0, "Candidate not registered");
+        require(candidate == msg.sender, "Only candidate it\'self can set taker");
+        candidates[candidate].profitTaker = taker;
+        emit LogCandidateUpdate(candidate, block.timestamp);
         return true;
     }
 

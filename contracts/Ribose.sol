@@ -26,12 +26,12 @@ contract Ribose {
     uint256 public constant JailReleaseThreshold = 12;
     
     uint64 public constant StakingLockPeriod = 86400;   // 72 hours, stakers have to wait StakingLockPeriod blocks to withdraw staking
-    uint64 public constant PendingSettlePeriod = 28800; // 24 hours, pending income will be punished
+    uint64 public constant PendingSettlePeriod = 28800; // 24 hours, pending income could be punished due to misbehaviors
     
     uint256 public constant ProfitValueScale = 1_000_000_000;
     
     uint256 public constant BlockProfitCycle = 20_000_000;
-    uint256[] public BlockProfits; // Predefined block profit, index grow every 20,000,000 blocks(2 year)
+    uint256[] public BlockProfits; // Predefined block profit, index increases every 20,000,000 blocks(about 2 year)
     address public constant ARMAddr = 0x000000000000000000000000000000000000c000; // ARM ERC20 contract address
     bool public initialized;
     
@@ -220,14 +220,13 @@ contract Ribose {
     }
     
     // register as validator candidate
-    function register(/*uint32 stakerShare*/) external onlyInitialized returns (bool) {
+    function register() external onlyInitialized returns (bool) {
         address payable nominee = msg.sender;
         require(candidates[nominee].createTime == 0, "Already registered");
-        // require(stakerShare <= FullProfitShare, "Staker share overflow");
         
         Candidate memory candidate;
         candidate.profitTaker = nominee;
-        candidate.stakerShare = StakerProfitShare; //stakerShare;
+        candidate.stakerShare = StakerProfitShare;
         candidate.createTime = block.timestamp;
         candidate.pendingSettleBlock = block.number;
         candidates[nominee] = candidate;
@@ -259,7 +258,8 @@ contract Ribose {
     
     function setProfitTaker(address candidate, address payable taker) external onlyInitialized returns (bool) {
         require(candidates[candidate].createTime > 0, "Candidate not registered");
-        require(candidate == msg.sender, "Only candidate it\'self can set taker");
+        require(candidates[candidate].profitTaker == msg.sender, "Only current taker can set new taker");
+        require(candidates[candidate].profitTaker != taker, "New taker is the same as old");
         candidates[candidate].profitTaker = taker;
         emit LogCandidateUpdate(candidate, block.timestamp);
         return true;
@@ -338,7 +338,9 @@ contract Ribose {
         uint256 decimalScale = 1 ether;
         int128 armValue = Logarithm.divu(arm, decimalScale);
         int128 powerScale = Logarithm.ln(armValue);
-        return Logarithm.mulu(powerScale, rna);
+        uint256 power = Logarithm.mulu(powerScale, rna);
+        require(power <= rna.mul(21), "ARM acceleration should smaller than 21");
+        return power;
     }
 
     // calculate profit from value delta & power
@@ -349,7 +351,7 @@ contract Ribose {
 
     // calculate reward of a block by block number
     function _currentBlockReward() internal view returns (uint256) {
-        // 20,000,000 blocks(2 year, 347.22 days) per cycle
+        // 20,000,000 blocks(about 2 years, 347.22 * 2 days estimated) per cycle
         uint256 index = block.number.div(BlockProfitCycle);
         if (index < BlockProfits.length) {
             // first 0-12 years(first 6 cycles)
@@ -362,12 +364,12 @@ contract Ribose {
     function _bookStakerProfit(address candidate, address staker) internal {
         uint256 currentValue = candidates[candidate].profitValue;
         uint256 lastValue = stakes[candidate][staker].bookAtValue;
-        uint256 valueDelta = currentValue - lastValue;
+        uint256 valueDelta = SafeMath.sub(currentValue, lastValue);
         if (valueDelta > 0) {
             uint256 power = _calcStakePower(stakes[candidate][staker].rna, stakes[candidate][staker].arm);
             uint256 profit = _calcStakerProfit(valueDelta, power);
             // write this profit into profit book
-            profitBook[staker] += profit;
+            profitBook[staker] = profitBook[staker].add(profit);
             stakes[candidate][staker].bookAtValue = currentValue;
         }
     }
@@ -375,12 +377,12 @@ contract Ribose {
     // try settle a miner's profit in pending state
     function _trySettleMinerProfit(address candidate) internal {
         if (
-            candidates[candidate].pendingSettleBlock + PendingSettlePeriod <= block.number
+            candidates[candidate].pendingSettleBlock.add(PendingSettlePeriod) <= block.number
             && candidates[candidate].pendingProfit > 0
         ) {
             // only settle half of pending profit, others will be reserved for punishment
             uint256 halfProfit = candidates[candidate].pendingProfit.div(2);
-            candidates[candidate].minerProfit += (candidates[candidate].pendingProfit - halfProfit);
+            candidates[candidate].minerProfit = candidates[candidate].minerProfit.add(candidates[candidate].pendingProfit.sub(halfProfit));
             candidates[candidate].pendingProfit = halfProfit;
             candidates[candidate].pendingSettleBlock = block.number;
         }
@@ -390,11 +392,11 @@ contract Ribose {
     function _updatePunishRecord(address candidate) internal {
         if (candidates[candidate].punishedAtBlock > 0) {
             // calculate punish decrease since last update
-            uint256 alreadyDecrease = (block.number - candidates[candidate].punishedAtBlock).div(PunishDecreaseInterval);
+            uint256 alreadyDecrease = block.number.sub(candidates[candidate].punishedAtBlock).div(PunishDecreaseInterval);
             if (alreadyDecrease > 0) {
                 if (candidates[candidate].missedBlocks > alreadyDecrease) {
                     // still has punish after decrease
-                    candidates[candidate].missedBlocks -= alreadyDecrease;
+                    candidates[candidate].missedBlocks = candidates[candidate].missedBlocks.sub(alreadyDecrease);
                     candidates[candidate].punishedAtBlock = block.number;
                 } else {
                     // punish cleared
@@ -458,7 +460,7 @@ contract Ribose {
     function _removeStakedCandidate(address staker, address candidate) internal {
         for (uint256 i = 0; i < stakers[staker].length; i++) {
             if (stakers[staker][i] == candidate) {
-                stakers[staker][i] = stakers[staker][stakers[staker].length - 1];
+                stakers[staker][i] = stakers[staker][stakers[staker].length.sub(1)];
                 stakers[staker].pop();
                 return;
             }
@@ -492,21 +494,21 @@ contract Ribose {
             stakeInfo.lockBlock = block.number;
             stakes[candidate][staker] = stakeInfo;
             uint256 power = _calcStakePower(rnaAmount, armAmount);
-            candidates[candidate].stakePower += power;
+            candidates[candidate].stakePower = candidates[candidate].stakePower.add(power);
         } else {
             // try book profits up to now first
             _bookStakerProfit(candidate, staker);
             // update stake power
             uint256 oldPower = _calcStakePower(stakes[candidate][staker].rna, stakes[candidate][staker].arm);
-            stakes[candidate][staker].rna += rnaAmount;
-            stakes[candidate][staker].arm += armAmount;
+            stakes[candidate][staker].rna = stakes[candidate][staker].rna.add(rnaAmount);
+            stakes[candidate][staker].arm = stakes[candidate][staker].arm.add(armAmount);
             stakes[candidate][staker].lockBlock = block.number;
             uint256 newPower = _calcStakePower(stakes[candidate][staker].rna, stakes[candidate][staker].arm);
-            uint256 delta = newPower - oldPower;
-            candidates[candidate].stakePower += delta;
+            uint256 delta = SafeMath.sub(newPower, oldPower);
+            candidates[candidate].stakePower = candidates[candidate].stakePower.add(delta);
         }
-        candidates[candidate].stakeRNA += rnaAmount;
-        candidates[candidate].stakeARM += armAmount;
+        candidates[candidate].stakeRNA = candidates[candidate].stakeRNA.add(rnaAmount);
+        candidates[candidate].stakeARM = candidates[candidate].stakeARM.add(armAmount);
         emit LogStake(candidate, staker, rnaAmount, armAmount, block.timestamp);
         _updatePunishRecord(candidate);
         _updateTopList(candidate);
@@ -582,8 +584,8 @@ contract Ribose {
         _bookStakerProfit(candidate, staker);
         
         uint256 oldPower = _calcStakePower(stakes[candidate][staker].rna, stakes[candidate][staker].arm);
-        stakes[candidate][staker].rna -= rnaAmount;
-        stakes[candidate][staker].arm -= armAmount;
+        stakes[candidate][staker].rna = stakes[candidate][staker].rna.sub(rnaAmount);
+        stakes[candidate][staker].arm = stakes[candidate][staker].arm.sub(armAmount);
         // stakes[candidate][staker].lockBlock = block.number;
 
         uint256 newPower = 0;
@@ -593,15 +595,15 @@ contract Ribose {
 
         if (rnaAmount > 0) {
             staker.transfer(rnaAmount);
-            candidates[candidate].stakeRNA -= rnaAmount;
+            candidates[candidate].stakeRNA = candidates[candidate].stakeRNA.sub(rnaAmount);
         }
         if (armAmount > 0) {
             TransferHelper.safeTransfer(ARMAddr, staker, armAmount);
-            candidates[candidate].stakeARM -= armAmount;
+            candidates[candidate].stakeARM = candidates[candidate].stakeARM.sub(armAmount);
         }
 
-        uint256 delta = oldPower - newPower;
-        candidates[candidate].stakePower -= delta;
+        uint256 delta = SafeMath.sub(oldPower, newPower);
+        candidates[candidate].stakePower = candidates[candidate].stakePower.sub(delta);
         
         // nolonger staking for this candidate
         if (stakes[candidate][staker].rna == 0 && stakes[candidate][staker].arm == 0) {
@@ -641,7 +643,7 @@ contract Ribose {
     function getStakerUnsettledProfit(address candidate, address staker) external view returns (uint256) {
         uint256 currentValue = candidates[candidate].profitValue;
         uint256 lastValue = stakes[candidate][staker].bookAtValue;
-        uint256 valueDelta = currentValue - lastValue;
+        uint256 valueDelta = SafeMath.sub(currentValue, lastValue);
         if (valueDelta > 0) {
             uint256 power = _calcStakePower(stakes[candidate][staker].rna, stakes[candidate][staker].arm);
             uint256 profit = _calcStakerProfit(valueDelta, power);
@@ -765,27 +767,27 @@ contract Ribose {
         uint256 fee = msg.value;                     // tx fees collected by this block
         uint256 blockReword = _currentBlockReward(); // new reward of this block
 
-        candidates[miner].totalMined += blockReword;
-        candidates[miner].totalFee += fee;
-        uint256 totalProfit = fee + blockReword;
+        candidates[miner].totalMined = candidates[miner].totalMined.add(blockReword);
+        candidates[miner].totalFee = candidates[miner].totalFee.add(fee);
+        uint256 totalProfit = SafeMath.add(fee, blockReword);
         
         if (candidates[miner].jailed) {
             uint256 totalShared = _addSharablePunishedProfit(totalProfit, miner);
-            uint256 remain = totalProfit.div(totalShared);
+            uint256 remain = totalProfit.sub(totalShared);
             if (remain > 0) {
-                candidates[miner].pendingProfit.add(remain);
+                candidates[miner].pendingProfit = candidates[miner].pendingProfit.add(remain);
             }
         } else {
             if (/*candidates[miner].stakerShare > 0 && */candidates[miner].stakePower > 0) {
                 // share profit with stakers by share rate
                 uint256 stakerValue = _calcValueChange(/*candidates[miner].stakerShare*/StakerProfitShare, candidates[miner].stakePower, totalProfit);
-                candidates[miner].profitValue += stakerValue;
+                candidates[miner].profitValue = candidates[miner].profitValue.add(stakerValue);
                 uint256 stakerProfit = stakerValue.mul(candidates[miner].stakePower).div(ProfitValueScale); // CHECK
-                uint256 validatorProfit = totalProfit - stakerProfit;
-                candidates[miner].pendingProfit += validatorProfit;
+                uint256 validatorProfit = SafeMath.sub(totalProfit, stakerProfit);
+                candidates[miner].pendingProfit = candidates[miner].pendingProfit.add(validatorProfit);
             } else {
                 // do not share with stakers
-                candidates[miner].pendingProfit += totalProfit;
+                candidates[miner].pendingProfit = candidates[miner].pendingProfit.add(totalProfit);
             }
             _trySettleMinerProfit(miner);
         }
@@ -799,9 +801,9 @@ contract Ribose {
         candidates[val].missedBlocks += 1;
         if (candidates[val].punishedAtBlock > 0) {
             // adjust punish block by decrease record
-            uint256 alreadyDecreased = (block.number - candidates[val].punishedAtBlock).div(PunishDecreaseInterval);
+            uint256 alreadyDecreased = block.number.sub(candidates[val].punishedAtBlock).div(PunishDecreaseInterval);
             if (candidates[val].missedBlocks > alreadyDecreased) {
-                candidates[val].missedBlocks -= alreadyDecreased;
+                candidates[val].missedBlocks = candidates[val].missedBlocks.sub(alreadyDecreased);
             } else {
                 candidates[val].missedBlocks = 1;
             }
@@ -825,7 +827,7 @@ contract Ribose {
         if (candidates[val].pendingProfit > 0) {
             uint256 totalShared = _addSharablePunishedProfit(candidates[val].pendingProfit, val);
             // remained profit share is rewarded to the excutor
-            candidates[excutor].pendingProfit += (candidates[val].pendingProfit - totalShared);
+            candidates[excutor].pendingProfit = candidates[excutor].pendingProfit.add(candidates[val].pendingProfit.sub(totalShared));
             candidates[val].pendingProfit = 0;
             candidates[val].pendingSettleBlock = block.number;
         }
@@ -838,7 +840,7 @@ contract Ribose {
             if (validators[i] == except || candidates[validators[i]].jailed) {
                 continue;
             }
-            shareCount.add(1);
+            shareCount ++;
         }
         uint256 totalShared = 0;
         if (shareCount > 0) {
@@ -847,8 +849,8 @@ contract Ribose {
                 if (validators[i] == except || candidates[validators[i]].jailed) {
                     continue;
                 }
-                candidates[validators[i]].pendingProfit += valShare;
-                totalShared += valShare;
+                candidates[validators[i]].pendingProfit = candidates[validators[i]].pendingProfit.add(valShare);
+                totalShared = totalShared.add(valShare);
             }
         }
         return totalShared;

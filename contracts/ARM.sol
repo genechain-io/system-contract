@@ -31,7 +31,7 @@ contract ARM is ERC20 {
     
     mapping(address => ExchangeInfo) exchangeInfo;
     
-    event LogMemoSet(address indexed acc, string indexed memo);
+    event LogMemoSet(address indexed acc, string memo);
     
     modifier onlySrcTokenSet() {
         require(SrcTokenAddr != address(0), "Source token address not set");
@@ -74,7 +74,7 @@ contract ARM is ERC20 {
         require(value > 0, "Amount should greator than 0");
         TransferHelper.safeTransferFrom(SrcTokenAddr, msg.sender, address(this), value);
         _mint(msg.sender, value);
-        exchangeInfo[msg.sender].amount += value;
+        exchangeInfo[msg.sender].amount = exchangeInfo[msg.sender].amount.add(value);
     }
     
     /**
@@ -85,7 +85,7 @@ contract ARM is ERC20 {
       require(value <= exchangeInfo[msg.sender].amount, "Not enough amount to burn");
       _burn(msg.sender, value);
       TransferHelper.safeTransfer(SrcTokenAddr, msg.sender, value);
-      exchangeInfo[msg.sender].amount -= value;
+      exchangeInfo[msg.sender].amount = exchangeInfo[msg.sender].amount.sub(value);
     }
 
     // optional functions from ERC20 stardard

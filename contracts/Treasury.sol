@@ -12,9 +12,9 @@ contract Treasury {
     uint256 public constant SeasonFund = 187_500 ether; // fund releases every season
     uint8 public constant MaxRedeemCount = 16; // can redeem 16 times
     uint32 public constant RedeemInterval = 2_628_000; // can redeem every 2,628,000 blocks (a season)
-    address payable public constant RedeemAccount = 0x15973636A677F7f87B00423444021ad904856bE3;
+    address payable public constant RedeemAccount = 0xc4018Ba724EBf8890DB22e25B301261ef54bB184;
     
-    uint8 redeemCount = 0;
+    uint8 public redeemCount = 0;
     
     event LogTreasuryRedeem(
         address indexed redeemBy,

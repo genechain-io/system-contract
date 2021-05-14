@@ -20,13 +20,13 @@ contract Ribose {
     uint256 public constant MinimalStakingRNA = 1 ether;
     uint256 public constant MinimalStakingARM = 1 ether;
 
-    uint256 public constant PunishThreshold = 24;
+    uint256 public constant PunishThreshold = 50;
     uint256 public constant PunishDecreaseInterval = 1200;
-    uint256 public constant JailThreshold = 48;
+    uint256 public constant JailThreshold = 150;
     uint256 public constant JailReleaseThreshold = 12;
     
     uint64 public constant StakingLockPeriod = 86400;   // 72 hours, stakers have to wait StakingLockPeriod blocks to withdraw staking
-    uint64 public constant PendingSettlePeriod = 28800; // 24 hours, pending income could be punished due to misbehaviors
+    uint64 public constant PendingSettlePeriod = 86400; // 72 hours, pending income could be punished due to misbehaviors
     
     uint256 public constant ProfitValueScale = 1_000_000_000;
     
@@ -181,6 +181,11 @@ contract Ribose {
     
     modifier onlyNotPunished() {
         require(!punished[block.number], "Already punished");
+        _;
+    }
+    
+    modifier onlyZeroGasPrice() {
+        require(tx.gasprice == 0 , "Gas price is not zero");
         _;
     }
     
@@ -416,6 +421,9 @@ contract Ribose {
         if (candidates[candidate].jailed) {
             return;
         }
+        if (candidates[candidate].stakeRNA < 10000 ether) {
+            return;
+        }
         // check if candidate is already in list
         for (uint256 i = 0; i < topCandidates.length; i++) {
             if (topCandidates[i] == candidate) {
@@ -426,6 +434,7 @@ contract Ribose {
         // list not full yet, add it into list
         if (topCandidates.length < MaxTopCandidates) {
             topCandidates.push(candidate);
+            emit LogTopCandidatesAdd(candidate, block.timestamp);
             return;
         }
         // list is full, try to replace the lowest one
@@ -689,7 +698,7 @@ contract Ribose {
         address payable withdrawer = msg.sender;
         require(
             candidates[candidate].profitTaker == withdrawer,
-            "Only specified profitTaker can withdraw minerminer profit"
+            "Only specified profitTaker can withdraw miner profit"
         );
         
         _trySettleMinerProfit(candidate);
@@ -746,7 +755,7 @@ contract Ribose {
     function updateValidatorSet(
         address[] memory newSet, 
         uint256 epoch
-    ) external onlyInitialized onlyMiner onlyNotUpdated onlyBlockEpoch(epoch) {
+    ) external onlyInitialized onlyMiner onlyNotUpdated onlyBlockEpoch(epoch) onlyZeroGasPrice {
         operationsDone[block.number][uint8(Operations.UpdateValidators)] = true;
         require(newSet.length > 0, "Validator set empty!");
         require(newSet.length <= MaxValidators, "Validator set too large!");
@@ -760,7 +769,7 @@ contract Ribose {
     }
     
     // distributeBlockReward distributes block reward to all active validators
-    function distributeBlockReward() external payable onlyMiner onlyNotRewarded onlyInitialized {
+    function distributeBlockReward() external payable onlyMiner onlyNotRewarded onlyInitialized  onlyZeroGasPrice {
         operationsDone[block.number][uint8(Operations.Distribute)] = true;
         address miner = msg.sender;
         
@@ -796,7 +805,7 @@ contract Ribose {
     }
     
     // punish a validator who failed to produce block
-    function punish(address val) external onlyMiner onlyInitialized onlyNotPunished {
+    function punish(address val) external onlyMiner onlyInitialized onlyNotPunished onlyZeroGasPrice {
         punished[block.number] = true;
         candidates[val].missedBlocks += 1;
         if (candidates[val].punishedAtBlock > 0) {

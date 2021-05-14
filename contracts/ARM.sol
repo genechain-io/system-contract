@@ -22,7 +22,7 @@ contract ARM is ERC20 {
     uint8 private constant _decimals = 18;
     
     address public SrcTokenAddr;
-    address public constant ARMAdmin = 0x15973636A677F7f87B00423444021ad904856bE3;
+    address public constant ARMAdmin = 0xc4018Ba724EBf8890DB22e25B301261ef54bB184;
     
     struct ExchangeInfo {
         string memo;
